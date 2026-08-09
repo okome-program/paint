@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>ペイントプロトタイプ</title>
+  <style>
+    :root{
+      --bg:#f3f4f6;
+      --panel:#ffffff;
+      --accent:#111827;
+    }
+    html,body{height:100%;margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,"Hiragino Kaku Gothic ProN",Meiryo,sans-serif;background:var(--bg);color:var(--accent)}
+    .app{max-width:1000px;margin:24px auto;padding:16px;background:var(--panel);box-shadow:0 6px 18px rgba(0,0,0,0.08);border-radius:10px}
+    .toolbar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+    .toolbar > *{display:flex;align-items:center;gap:8px}
+    button{padding:8px 12px;border-radius:8px;border:1px solid #e5e7eb;background:#fff;cursor:pointer}
+    button.active{background:#111827;color:#fff;border-color:#111827}
+    input[type="range"]{width:120px}
+    #canvasWrap{border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;background:#fff}
+    canvas{display:block;width:100%;height:600px;touch-action:none;background:#ffffff}
+    .small{padding:6px 8px;font-size:14px}
+    .muted{color:#6b7280;font-size:13px}
+  </style>
+</head>
+<body>
+  <div class="app">
+    <h3>HTMLペイントプロトタイプ</h3>
+
+    <div class="toolbar" role="toolbar" aria-label="ペイントツール">
+      <div>
+        <label class="muted">色</label>
+        <input id="color" type="color" value="#111827" title="色を選択">
+      </div>
+
+      <div>
+        <label class="muted">ブラシ</label>
+        <input id="size" type="range" min="1" max="60" value="6" title="ブラシサイズ">
+        <span id="sizeLabel" class="muted">6</span>px
+      </div>
+
+      <div>
+        <button id="brushBtn" class="active small">ブラシ</button>
+        <button id="eraserBtn" class="small">消しゴム</button>
+      </div>
+
+      <div>
+        <button id="undoBtn" class="small">戻る</button>
+        <button id="clearBtn" class="small">クリア</button>
+      </div>
+
+      <div>
+        <button id="saveBtn" class="small">保存 (PNG)</button>
+      </div>
+
+      <div style="margin-left:auto" class="muted">プロトタイプ — 保存して試してください</div>
+    </div>
+
+    <div id="canvasWrap">
+      <canvas id="canvas"></canvas>
+    </div>
+  </div>
+
+  <script>
+    // 基本設定
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const colorInput = document.getElementById('color');
+    const sizeInput = document.getElementById('size');
+    const sizeLabel = document.getElementById('sizeLabel');
+    const brushBtn = document.getElementById('brushBtn');
+    const eraserBtn = document.getElementById('eraserBtn');
+    const undoBtn = document.getElementById('undoBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    const saveBtn = document.getElementById('saveBtn');
+
+    // 高DPI対応とリサイズ
+    function resizeCanvas() {
+      const rect = canvas.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = Math.floor(rect.width * dpr);
+      canvas.height = Math.floor(rect.height * dpr);
+      ctx.scale(dpr, dpr);
+      redrawBackground();
+      restoreFromStack(); // リサイズ後に最後の状態を復元
+    }
+
+    // 初期キャンバス高さをCSSで指定しているため、キャンバスの実ピクセルサイズを合わせる
+    function initCanvasSize() {
+      const wrap = document.getElementById('canvasWrap');
+      const height = 600; // CSSと一致させる
+      canvas.style.height = height + 'px';
+      canvas.style.width = '100%';
+      resizeCanvas();
+    }
+
+    // 描画状態
+    let drawing = false;
+    let last = { x: 0, y: 0 };
+    let tool = 'brush';
+    let brushColor = colorInput.value;
+    let brushSize = parseInt(sizeInput.value, 10);
+
+    // Undo用スタック
+    const maxStack = 20;
+    const stack = [];
+    let stackPointer = -1;
+
+    function pushStack() {
+      try {
+        const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        // スタックを現在位置まで切り詰めてから追加
+        stack.splice(stackPointer + 1);
+        stack.push(data);
+        if (stack.length > maxStack) stack.shift();
+        stackPointer = stack.length - 1;
+      } catch (e) {
+        // セキュリティ制限などで失敗する場合があるが、プロトタイプでは無視
+        console.warn('pushStack failed', e);
+      }
+    }
+
+    function restoreFromStack() {
+      if (stackPointer >= 0 && stack[stackPointer]) {
+        ctx.putImageData(stack[stackPointer], 0, 0);
+      } else {
+        redrawBackground();
+      }
+    }
+
+    function undo() {
+      if (stackPointer > 0) {
+        stackPointer--;
+        restoreFromStack();
+      } else {
+        // 最初の状態に戻す
+        stackPointer = -1;
+        redrawBackground();
+      }
+    }
+
+    // 背景（白）を描く
+    function redrawBackground() {
+      ctx.save();
+      ctx.setTransform(1,0,0,1,0,0); // リセット（高DPIでの安全策）
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.restore();
+    }
+
+    // 座標変換（マウス/タッチ）
+    function getPos(e) {
+      const rect = canvas.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      if (e.touches && e.touches.length) {
+        const t = e.touches[0];
+        return { x: (t.clientX - rect.left), y: (t.clientY - rect.top) };
+      } else {
+        return { x: (e.clientX - rect.left), y: (e.clientY - rect.top) };
+      }
+    }
+
+    // 描画開始
+    function startDraw(e) {
+      e.preventDefault();
+      drawing = true;
+      last = getPos(e);
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.strokeStyle = tool === 'eraser' ? '#ffffff' : brushColor;
+      ctx.lineWidth = brushSize;
+      ctx.beginPath();
+      ctx.moveTo(last.x, last.y);
+      pushStack(); // 新しい操作の前に状態を保存
+    }
+
+    // 描画中
+    function draw(e) {
+      if (!drawing) return;
+      const p = getPos(e);
+      ctx.strokeStyle = tool === 'eraser' ? '#ffffff' : brushColor;
+      ctx.lineWidth = brushSize;
+      ctx.lineTo(p.x, p.y);
+      ctx.stroke();
+      last = p;
+    }
+
+    // 描画終了
+    function endDraw(e) {
+      if (!drawing) return;
+      drawing = false;
+      ctx.closePath();
+    }
+
+    // イベント登録（マウス）
+    canvas.addEventListener('mousedown', startDraw);
+    window.addEventListener('mousemove', draw);
+    window.addEventListener('mouseup', endDraw);
+
+    // タッチ対応
+    canvas.addEventListener('touchstart', startDraw, { passive: false });
+    window.addEventListener('touchmove', draw, { passive: false });
+    window.addEventListener('touchend', endDraw);
+
+    // ツールUI
+    colorInput.addEventListener('input', (e) => {
+      brushColor = e.target.value;
+    });
+
+    sizeInput.addEventListener('input', (e) => {
+      brushSize = parseInt(e.target.value, 10);
+      sizeLabel.textContent = brushSize;
+    });
+
+    brushBtn.addEventListener('click', () => {
+      tool = 'brush';
+      brushBtn.classList.add('active');
+      eraserBtn.classList.remove('active');
+    });
+
+    eraserBtn.addEventListener('click', () => {
+      tool = 'eraser';
+      eraserBtn.classList.add('active');
+      brushBtn.classList.remove('active');
+    });
+
+    undoBtn.addEventListener('click', () => {
+      undo();
+    });
+
+    clearBtn.addEventListener('click', () => {
+      pushStack();
+      redrawBackground();
+    });
+
+    saveBtn.addEventListener('click', () => {
+      // PNGとしてダウンロード
+      const link = document.createElement('a');
+      // 一時的に実サイズのデータURLを作るため、canvasをクローンしてスケールをリセット
+      const tmp = document.createElement('canvas');
+      const rect = canvas.getBoundingClientRect();
+      tmp.width = rect.width;
+      tmp.height = rect.height;
+      const tctx = tmp.getContext('2d');
+      // draw current canvas onto tmp at CSS size
+      tctx.drawImage(canvas, 0, 0, tmp.width, tmp.height);
+      link.href = tmp.toDataURL('image/png');
+      link.download = 'painting.png';
+      link.click();
+    });
+
+    // 初期化
+    window.addEventListener('resize', () => {
+      // リサイズ時にキャンバスを再設定（簡易）
+      // 保存しておいたスタックを再描画するため、ここでは再描画処理を呼ぶ
+      // Note: 高度な実装ではスケーリング処理が必要
+      resizeCanvas();
+    });
+
+    // ページ読み込み時
+    (function init(){
+      initCanvasSize();
+      // 最初の空白状態をスタックに入れておく
+      pushStack();
+    })();
+  </script>
+</body>
+</html>
