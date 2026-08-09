@@ -88,9 +88,9 @@
     // 初期キャンバス高さをCSSで指定しているため、キャンバスの実ピクセルサイズを合わせる
     function initCanvasSize() {
       const wrap = document.getElementById('canvasWrap');
-      const height = 600; // CSSと一致させる
-      canvas.style.height = height + 'px';
-      canvas.style.width = '100%';
+      const height = 256; // CSSと一致させる
+      canvas.style.height = 256 + 'px';
+      canvas.style.width = 256 + 'px';
       resizeCanvas();
     }
 
